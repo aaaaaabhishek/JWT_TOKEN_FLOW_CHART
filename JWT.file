@@ -1,0 +1,78 @@
+                    ┌─────────────────────┐
+                    │   User Login (UI)   │
+                    └─────────┬───────────┘
+                              │ username/password + MFA (OTP/SMS/App)
+                              ▼
+           ┌─────────────────────────────────────┐
+           │ Auth Server (Spring Boot / Keycloak)│
+           └─────────────┬──────────┬────────────┘
+                         │ issue    │ store refresh
+                         │ tokens   │ token in DB/Redis
+                         ▼          ▼
+   ┌──────────────────────────────────────────────────────┐
+   │ Access Token (JWT, 5–15 min, signed RS256)           │
+   │ Refresh Token (24h max, ROTATED, device-bound)       │
+   └──────────────────────────────────────────────────────┘
+                         │
+                         ▼
+        ┌─────────────────────────────────────────┐
+        │ Session Store (Redis/DB)                 │
+        │ - Refresh token (rotated per use)        │
+        │ - Device ID / Fingerprint binding        │
+        │ - Expiry & idle timeout                  │
+        │ - Audit log (login/refresh/revoke)       │
+        └─────────────────────────────────────────┘
+
+
+                 Normal API Flow
+                 ───────────────
+Client → API Gateway → Backend Service
+   │                        │
+   │ JWT in header          │
+   │────────────────────────▶ validate JWT (sig, exp, claims, scope)
+   │                        │
+   │◀───────────────────────│ 200 OK
+
+
+      Expired Access Token Flow (Auto Refresh)
+      ───────────────────────────────────────
+Client → API Gateway → Backend Service
+   │                        │
+   │ expired JWT            │
+   │────────────────────────▶ reject (401 Unauthorized)
+   │                        │
+   │ interceptor triggers   │
+   │ call /auth/refresh     │
+   │ with refresh token     │
+   │────────────────────────▶ Auth Server validates:
+   │                        │   • check DB/Redis session
+   │                        │   • check expiry/idle timeout
+   │                        │   • verify device binding
+   │                        │   • enforce rotation (new refresh token issued)
+   │◀──────────────────────── issue new JWT (+ rotated refresh token)
+   │ retry API call          │
+   │ with fresh JWT          │
+   │────────────────────────▶ success
+   │
+   │──► Audit log updated ("refresh success", timestamp, device)
+
+
+   Suspicious / High-Value Transaction
+   ───────────────────────────────────
+Client → API Gateway → Backend
+   │ request flagged (new device/IP, large txn)
+   │────────────────────────▶ Step-Up Auth Triggered
+   │◀──────────────────────── prompt for OTP/2FA
+   │────────────────────────▶ validate OTP → continue
+
+
+   Refresh Token Expired / Revoked
+   ────────────────────────────────
+Client → /auth/refresh
+   │
+   │ refresh token invalid (expired / reused / revoked)
+   │────────────────────────▶ Auth Server
+   │◀──────────────────────── reject (403 Forbidden)
+   │
+   │──► Redirect to Login Page (user re-enters password+MFA)
+   │──► Audit log updated ("refresh failed", reason, device)
