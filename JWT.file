@@ -76,3 +76,29 @@ Client → /auth/refresh
    │
    │──► Redirect to Login Page (user re-enters password+MFA)
    │──► Audit log updated ("refresh failed", reason, device)
+
+=====================================================================================================
+Access token createion
+
+
+
+private String buildToken(String subject, String[] roles) {
+    Date now = new Date();
+    Date expiryDate = new Date(now.getTime() + jwtExpirationInMs);
+    String jti = UUID.randomUUID().toString();
+
+    Key key = getPrivateKey(); // from KMS / Vault
+
+    return Jwts.builder()
+            .setSubject(subject)
+            .setIssuer("https://auth.mybank.com")
+            .setAudience("banking-api")
+            .setId(jti)
+            .setIssuedAt(now)
+            .setExpiration(expiryDate)
+            .claim("token_type", "access")
+            .claim("roles", roles)
+            .signWith(key, SignatureAlgorithm.RS256)
+            .compact();
+}
+
